@@ -3581,6 +3581,32 @@ match_object_type(dmu_object_type_t obj_type, uint64_t flags)
 
 	return (match);
 }
+static int
+dump_path_impl(objset_t *os, uint64_t obj, char *name, uint64_t *retobj);
+static int
+zdb_copy_object(objset_t *os, uint64_t srcobj, char *destfile);
+
+void create_all_paths(char *filepath) {
+    const char delimiter[2] = "/";
+    char *token, *saveptr, *ptr;
+    char path[MAXPATHLEN * 2] = "";
+
+    ptr = strdup(filepath); // create a modifiable copy of filepath
+
+    token = strtok_r(ptr, delimiter, &saveptr);
+    while (token != NULL) {
+        strcat(path, delimiter);
+        strcat(path, token);
+        token = strtok_r(NULL, delimiter, &saveptr);
+
+        if( token != NULL && (access(path, F_OK) != 0))
+        {
+            mkdir(path, 0755);
+        }
+    }
+
+    free(ptr); // free the allocated memory
+}
 
 static void
 dump_object(objset_t *os, uint64_t object, int verbosity,
@@ -3702,82 +3728,102 @@ dump_object(objset_t *os, uint64_t object, int verbosity,
 		    zdb_ot_name(doi.doi_bonus_type));
 	}
 
-	if (verbosity >= 4) {
-		(void) printf("\tdnode flags: %s%s%s%s\n",
-		    (dn->dn_phys->dn_flags & DNODE_FLAG_USED_BYTES) ?
-		    "USED_BYTES " : "",
-		    (dn->dn_phys->dn_flags & DNODE_FLAG_USERUSED_ACCOUNTED) ?
-		    "USERUSED_ACCOUNTED " : "",
-		    (dn->dn_phys->dn_flags & DNODE_FLAG_USEROBJUSED_ACCOUNTED) ?
-		    "USEROBJUSED_ACCOUNTED " : "",
-		    (dn->dn_phys->dn_flags & DNODE_FLAG_SPILL_BLKPTR) ?
-		    "SPILL_BLKPTR" : "");
-		(void) printf("\tdnode maxblkid: %llu\n",
-		    (longlong_t)dn->dn_phys->dn_maxblkid);
+//	if (verbosity >= 4) {
+//		(void) printf("\tdnode flags: %s%s%s%s\n",
+//		    (dn->dn_phys->dn_flags & DNODE_FLAG_USED_BYTES) ?
+//		    "USED_BYTES " : "",
+//		    (dn->dn_phys->dn_flags & DNODE_FLAG_USERUSED_ACCOUNTED) ?
+//		    "USERUSED_ACCOUNTED " : "",
+//		    (dn->dn_phys->dn_flags & DNODE_FLAG_USEROBJUSED_ACCOUNTED) ?
+//		    "USEROBJUSED_ACCOUNTED " : "",
+//		    (dn->dn_phys->dn_flags & DNODE_FLAG_SPILL_BLKPTR) ?
+//		    "SPILL_BLKPTR" : "");
+//		(void) printf("\tdnode maxblkid: %llu\n",
+//		    (longlong_t)dn->dn_phys->dn_maxblkid);
+//
+//		if (!dnode_held) {
+//			object_viewer[ZDB_OT_TYPE(doi.doi_bonus_type)](os,
+//			    object, bonus, bsize);
+//		} else {
+//			(void) printf("\t\t(bonus encrypted)\n");
+//		}
+//
+//		if (key_loaded ||
+//		    (!os->os_encrypted || !DMU_OT_IS_ENCRYPTED(doi.doi_type))) {
+//			object_viewer[ZDB_OT_TYPE(doi.doi_type)](os, object,
+//			    NULL, 0);
+//		} else {
+//			(void) printf("\t\t(object encrypted)\n");
+//		}
+//
+//		*print_header = B_TRUE;
+//	}
+//
+//	if (verbosity >= 5) {
+//		if (dn->dn_phys->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
+//			char blkbuf[BP_SPRINTF_LEN];
+//			snprintf_blkptr_compact(blkbuf, sizeof (blkbuf),
+//			    DN_SPILL_BLKPTR(dn->dn_phys), B_FALSE);
+//			(void) printf("\nSpill block: %s\n", blkbuf);
+//		}
+//		dump_indirect(dn);
+//	}
 
-		if (!dnode_held) {
-			object_viewer[ZDB_OT_TYPE(doi.doi_bonus_type)](os,
-			    object, bonus, bsize);
-		} else {
-			(void) printf("\t\t(bonus encrypted)\n");
-		}
+    if( doi.doi_max_offset > 1000)
+    {
+        (void) fprintf(stderr, "############# file > 1000 #####################");
+        int err;
+        char path[MAXPATHLEN * 2];
+        sprintf(path,"/test");
 
-		if (key_loaded ||
-		    (!os->os_encrypted || !DMU_OT_IS_ENCRYPTED(doi.doi_type))) {
-			object_viewer[ZDB_OT_TYPE(doi.doi_type)](os, object,
-			    NULL, 0);
-		} else {
-			(void) printf("\t\t(object encrypted)\n");
-		}
+        char *path2 = path;
+        err = zfs_obj_to_path(os, object, path + 5 , sizeof (path) - 5);
 
-		*print_header = B_TRUE;
-	}
+       (void) fprintf(stderr, "############# writing file: %s\n",path2);
 
-	if (verbosity >= 5) {
-		if (dn->dn_phys->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
-			char blkbuf[BP_SPRINTF_LEN];
-			snprintf_blkptr_compact(blkbuf, sizeof (blkbuf),
-			    DN_SPILL_BLKPTR(dn->dn_phys), B_FALSE);
-			(void) printf("\nSpill block: %s\n", blkbuf);
-		}
-		dump_indirect(dn);
-	}
+        create_all_paths(path2);
 
-	if (verbosity >= 5) {
-		/*
-		 * Report the list of segments that comprise the object.
-		 */
-		uint64_t start = 0;
-		uint64_t end;
-		uint64_t blkfill = 1;
-		int minlvl = 1;
+        zdb_copy_object(os, object,path2);
 
-		if (dn->dn_type == DMU_OT_DNODE) {
-			minlvl = 0;
-			blkfill = DNODES_PER_BLOCK;
-		}
+       (void) fprintf(stderr, "############# written: %s\n",path2);
+    }
+    exit(1);
 
-		for (;;) {
-			char segsize[32];
-			/* make sure nicenum has enough space */
-			_Static_assert(sizeof (segsize) >= NN_NUMBUF_SZ,
-			    "segsize truncated");
-			error = dnode_next_offset(dn,
-			    0, &start, minlvl, blkfill, 0);
-			if (error)
-				break;
-			end = start;
-			error = dnode_next_offset(dn,
-			    DNODE_FIND_HOLE, &end, minlvl, blkfill, 0);
-			zdb_nicenum(end - start, segsize, sizeof (segsize));
-			(void) printf("\t\tsegment [%016llx, %016llx)"
-			    " size %5s\n", (u_longlong_t)start,
-			    (u_longlong_t)end, segsize);
-			if (error)
-				break;
-			start = end;
-		}
-	}
+//	if (verbosity >= 5) {
+//		/*
+//		 * Report the list of segments that comprise the object.
+//		 */
+//		uint64_t start = 0;
+//		uint64_t end;
+//		uint64_t blkfill = 1;
+//		int minlvl = 1;
+//
+//		if (dn->dn_type == DMU_OT_DNODE) {
+//			minlvl = 0;
+//			blkfill = DNODES_PER_BLOCK;
+//		}
+//
+//		for (;;) {
+//			char segsize[32];
+//			/* make sure nicenum has enough space */
+//			_Static_assert(sizeof (segsize) >= NN_NUMBUF_SZ,
+//			    "segsize truncated");
+//			error = dnode_next_offset(dn,
+//			    0, &start, minlvl, blkfill, 0);
+//			if (error)
+//				break;
+//			end = start;
+//			error = dnode_next_offset(dn,
+//			    DNODE_FIND_HOLE, &end, minlvl, blkfill, 0);
+//			zdb_nicenum(end - start, segsize, sizeof (segsize));
+//			(void) printf("\t\tsegment [%016llx, %016llx)"
+//			    " size %5s\n", (u_longlong_t)start,
+//			    (u_longlong_t)end, segsize);
+//			if (error)
+//				break;
+//			start = end;
+//		}
+//	}
 
 out:
 	if (db != NULL)
@@ -4861,6 +4907,7 @@ dump_path(char *ds, char *path, uint64_t *retobj)
 	objset_t *os;
 	uint64_t root_obj;
 
+// pst
 	err = open_objset(ds, FTAG, &os);
 	if (err != 0)
 		return (err);
